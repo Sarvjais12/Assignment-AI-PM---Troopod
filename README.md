@@ -1,6 +1,6 @@
 # 🚀 AI Landing Page Personalizer - Troopod Assignment
 
-[![Hugging Face Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Space-blue)](YOUR_SPACE_URL)
+[![Hugging Face Space](https://img.shields.io/badge/🤗%20Hugging%20Face-Space-blue)]([YOUR_SPACE_URL](https://huggingface.co/spaces/Sarvjais12/troopod_AI-PM))
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
 [![Gradio](https://img.shields.io/badge/Gradio-4.0+-orange.svg)](https://gradio.app/)
 
@@ -8,7 +8,7 @@
 
 Upload an ad creative image and landing page URL to generate a CRO-optimized personalized experience with PM reasoning and a Scent Trail Score.
 
-**Live Demo:** [Your Hugging Face Space URL]
+**Live Demo:** [[Your Hugging Face Space URL]](https://huggingface.co/spaces/Sarvjais12/troopod_AI-PM)
 
 ---
 
@@ -445,4 +445,4 @@ MIT License - See LICENSE file for details
 
 ---
 
-Built for **Troopod AI PM Assignment** by [Your Name] • April 2026
+Built for **Troopod AI PM Assignment** by Sarvagya Jaiswal • April 2026
