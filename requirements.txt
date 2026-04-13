@@ -1,2 +1,5 @@
-gradio
-google-generativeai
+gradio>=4.0.0
+requests
+beautifulsoup4
+Pillow
+ 
