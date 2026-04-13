@@ -8,7 +8,7 @@
 
 Upload an ad creative image and landing page URL to generate a CRO-optimized personalized experience with PM reasoning and a Scent Trail Score.
 
-**Live Demo:** [[Your Hugging Face Space URL]](https://huggingface.co/spaces/Sarvjais12/troopod_AI-PM)
+**Live Demo:** https://huggingface.co/spaces/Sarvjais12/troopod_AI-PM
 
 ---
 
