@@ -41,12 +41,20 @@ def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress())
         if "Error" in website_content:
             return f"❌ Failed to scrape URL. {website_content}", "", ""
 
-        # Truncate to save tokens and speed up the API call (helps prevent 504s)
-        website_content = website_content[:2500] 
+        # OPTIMIZATION 1: Aggressive Truncation 
+        # Cut down to 1200 chars to ensure lightning-fast API response and avoid 504s
+        website_content = website_content[:1200] 
+
+        # OPTIMIZATION 2: Image Compression
+        progress(0.4, desc="Optimizing Image Payload...")
+        from PIL import Image
+        img = Image.open(ad_image)
+        # Shrink the image to max 800x800. Gemini vision still reads it perfectly, 
+        # but it takes 1/10th the bandwidth and processing power.
+        img.thumbnail((800, 800)) 
 
         # STEP 2: Configure Gemini 2.5 Flash
-        progress(0.5, desc="Analyzing Ad Creative & Formulating CRO Strategy...")
-        
+        progress(0.5, desc="Analyzing & Formulating CRO Strategy...")
         model = genai.GenerativeModel(
             model_name='gemini-2.5-flash',
             generation_config=genai.GenerationConfig(
@@ -80,25 +88,24 @@ def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress())
             ]
         }
         """
-
-        # STEP 3: Pass inputs with a Retry Mechanism for 504 Timeouts
-        from PIL import Image
-        img = Image.open(ad_image)
+        
         user_prompt = f"Here is the text scraped from the landing page: \n\n{website_content}"
         
+        # OPTIMIZATION 3: Paced Retry Loop (Respecting the 5 RPM Limit)
         max_retries = 2
         response = None
         
         for attempt in range(max_retries):
             try:
-                progress(0.7, desc=f"Generating Personalized Page Content (Attempt {attempt + 1})...")
+                progress(0.7, desc=f"Generating Content (Attempt {attempt + 1})...")
                 response = model.generate_content([system_prompt, user_prompt, img])
-                break # If successful, break out of the retry loop
+                break 
             except Exception as api_error:
                 if attempt == max_retries - 1:
-                    raise api_error # Throw error if we fail the last attempt
-                print(f"API Timeout, retrying... {str(api_error)}")
-                time.sleep(2) # Buffer before retry
+                    raise api_error 
+                print(f"API Timeout/Rate Limit. Retrying... {str(api_error)}")
+                # Sleep for 15 seconds to let the 5-requests-per-minute quota cool down
+                time.sleep(15) 
         
         # Parse the JSON
         result = json.loads(response.text)
@@ -118,7 +125,6 @@ def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress())
 
     except Exception as e:
         return f"❌ System Error: {str(e)}", "", ""
-
 
 # --- Gradio UI Layout ---
 with gr.Blocks(theme=gr.themes.Soft(), title="AI CRO Personalizer") as demo:
