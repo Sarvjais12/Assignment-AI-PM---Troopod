@@ -12,7 +12,7 @@ def get_gemini_model(system_prompt: str):
     Helper function to initialize the Gemini model with specific PM constraints.
     """
     return genai.GenerativeModel(
-        model_name='gemini-1.5-flash-latest', # <--- Changed to -latest
+        model_name='gemini-2.5-flash', # <--- Changed to the current active model!
         system_instruction=system_prompt,
         generation_config=genai.GenerationConfig(
             temperature=0.3, 
