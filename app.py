@@ -224,6 +224,11 @@ def build_preview(result: dict, original_url: str) -> str:
     cta = page.get("new_cta", "")
     old_h = orig.get("headline", "")
     old_cta = orig.get("cta", "")
+    
+    import html
+    headline = html.escape(page.get("new_headline", ""))
+    subheadline = html.escape(page.get("new_subheadline", ""))
+    cta = html.escape(page.get("new_cta", ""))
 
     return f"""<!DOCTYPE html>
 <html lang="en">
