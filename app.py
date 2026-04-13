@@ -41,9 +41,8 @@ def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress())
         if "Error" in website_content:
             return f"❌ Failed to scrape URL. {website_content}", "", ""
 
-        # We truncate the website text to the first 3000 chars to save tokens 
-        # and focus only on the "Above the Fold" content (H1, hero, primary CTA)
-        website_content = website_content[:3000] 
+        # Truncate to save tokens and speed up the API call (helps prevent 504s)
+        website_content = website_content[:2500] 
 
         # STEP 2: Configure Gemini 2.5 Flash
         progress(0.5, desc="Analyzing Ad Creative & Formulating CRO Strategy...")
@@ -82,14 +81,24 @@ def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress())
         }
         """
 
-        # STEP 3: Pass the Image and the URL text to Gemini
+        # STEP 3: Pass inputs with a Retry Mechanism for 504 Timeouts
         from PIL import Image
         img = Image.open(ad_image)
-        
         user_prompt = f"Here is the text scraped from the landing page: \n\n{website_content}"
         
-        progress(0.7, desc="Generating Personalized Page Content...")
-        response = model.generate_content([system_prompt, user_prompt, img])
+        max_retries = 2
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                progress(0.7, desc=f"Generating Personalized Page Content (Attempt {attempt + 1})...")
+                response = model.generate_content([system_prompt, user_prompt, img])
+                break # If successful, break out of the retry loop
+            except Exception as api_error:
+                if attempt == max_retries - 1:
+                    raise api_error # Throw error if we fail the last attempt
+                print(f"API Timeout, retrying... {str(api_error)}")
+                time.sleep(2) # Buffer before retry
         
         # Parse the JSON
         result = json.loads(response.text)
