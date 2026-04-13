@@ -1,303 +1,145 @@
 import gradio as gr
 import google.generativeai as genai
+import requests
 import os
 import json
-from typing import Dict, Tuple
+import time
 
-# Global state for tracking progress in the UI
-agent_status = {}
+def scrape_url(url):
+    """
+    Uses Jina Reader to safely extract text from any URL, 
+    bypassing most WAF/Cloudflare bot-blockers.
+    """
+    try:
+        jina_url = f"https://r.jina.ai/{url}"
+        headers = {"Accept": "application/json"}
+        response = requests.get(jina_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("data", {}).get("content", "Could not extract text.")
+        else:
+            return f"Error: Status code {response.status_code}"
+    except Exception as e:
+        return f"Error scraping URL: {str(e)}"
 
-def get_gemini_model(system_prompt: str):
-    """
-    Helper function to initialize the Gemini model with specific PM constraints.
-    """
-    return genai.GenerativeModel(
-        model_name='gemini-2.5-flash', # <--- Changed to the current active model!
-        system_instruction=system_prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.3, 
-            response_mime_type="application/json", 
-        )
-    )
+def personalize_landing_page(ad_image, landing_page_url, progress=gr.Progress()):
+    if not ad_image or not landing_page_url:
+        return "⚠️ Please upload an ad image and enter a URL.", "", ""
 
-def run_agent(agent_id: str, agent_name: str, system_prompt: str, user_prompt: str) -> Dict:
-    """
-    Core function to run a single specialized agent and return structured data.
-    """
-    # Check for API key before attempting the call
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is missing. Please add it to your Space secrets.")
-
+        return "⚠️ GEMINI_API_KEY secret is missing in Hugging Face.", "", ""
+    
     genai.configure(api_key=api_key)
 
     try:
-        agent_status[agent_id] = "running"
+        # STEP 1: Scrape the Live URL
+        progress(0.2, desc="Scraping live URL via Jina Reader...")
+        website_content = scrape_url(landing_page_url)
         
-        # Initialize the specific agent persona
-        model = get_gemini_model(system_prompt)
+        if "Error" in website_content:
+            return f"❌ Failed to scrape URL. {website_content}", "", ""
+
+        # We truncate the website text to the first 3000 chars to save tokens 
+        # and focus only on the "Above the Fold" content (H1, hero, primary CTA)
+        website_content = website_content[:3000] 
+
+        # STEP 2: Configure Gemini 2.5 Flash
+        progress(0.5, desc="Analyzing Ad Creative & Formulating CRO Strategy...")
         
-        # Run the generation
-        response = model.generate_content(user_prompt)
+        model = genai.GenerativeModel(
+            model_name='gemini-2.5-flash',
+            generation_config=genai.GenerationConfig(
+                temperature=0.2, 
+                response_mime_type="application/json", 
+            )
+        )
+
+        system_prompt = """
+        You are an elite Conversion Rate Optimization (CRO) Product Manager. 
+        You are given an Ad Creative image and the Markdown text of a current landing page.
         
-        # Because we enforced JSON mime-type, we can parse it safely and directly
-        result_json = json.loads(response.text)
+        Your task: Enhance the existing page copy to match the ad's specific offer, tone, and audience.
+        DO NOT invent a completely new page. You must use the existing structure but rewrite the Hero Headline, Subheadline, and primary Call to Action (CTA) to create a perfect "Scent Trail" from the ad.
         
-        agent_status[agent_id] = "complete"
-        return result_json
+        Output strictly in this JSON format:
+        {
+            "ad_analysis": "Briefly describe the core offer and target audience of the ad.",
+            "original_copy": {
+                "headline": "Extract what looks like the main H1 from the website text",
+                "cta": "Extract the primary CTA button text"
+            },
+            "personalized_page": {
+                "new_headline": "Your CRO optimized headline",
+                "new_subheadline": "Your CRO optimized subheadline",
+                "new_cta": "Your optimized CTA"
+            },
+            "pm_reasoning": [
+                "Change 1: Why you made it",
+                "Change 2: Why you made it"
+            ]
+        }
+        """
+
+        # STEP 3: Pass the Image and the URL text to Gemini
+        from PIL import Image
+        img = Image.open(ad_image)
         
+        user_prompt = f"Here is the text scraped from the landing page: \n\n{website_content}"
+        
+        progress(0.7, desc="Generating Personalized Page Content...")
+        response = model.generate_content([system_prompt, user_prompt, img])
+        
+        # Parse the JSON
+        result = json.loads(response.text)
+        
+        progress(1.0, desc="Done!")
+        
+        # FORMAT THE OUTPUTS FOR THE UI
+        strategy = f"### 🎯 Ad Analysis\n{result.get('ad_analysis')}\n\n### 💡 PM Reasoning\n"
+        for reason in result.get('pm_reasoning', []):
+            strategy += f"- {reason}\n"
+            
+        before = f"**Headline:** {result.get('original_copy', {}).get('headline')}\n\n**CTA:** {result.get('original_copy', {}).get('cta')}"
+        
+        after = f"**Headline:** {result.get('personalized_page', {}).get('new_headline')}\n\n**Subheadline:** {result.get('personalized_page', {}).get('new_subheadline')}\n\n**CTA:** {result.get('personalized_page', {}).get('new_cta')}"
+        
+        return strategy, before, after
+
     except Exception as e:
-        agent_status[agent_id] = "error"
-        raise Exception(f"{agent_name} failed: {str(e)}")
+        return f"❌ System Error: {str(e)}", "", ""
 
-
-def agent_1_analyze_ad(ad_description: str) -> Dict:
-    """Agent 1: Extracts messaging, tone, and visual elements from the ad."""
-    
-    system_prompt = "You are an expert ad creative analyst. Your job is to identify the core messaging, emotional tone, and target audience from ad descriptions."
-    
-    user_prompt = f"""Analyze this ad creative and extract the following using this exact JSON schema:
-{{
-  "primary_value_prop": "main promise or benefit",
-  "emotional_tone": "urgent/aspirational/educational/etc",
-  "target_audience": "who this is for",
-  "headline": "main headline or hook",
-  "cta_text": "call to action text",
-  "key_messages": ["key point 1", "key point 2"]
-}}
-
-Ad Description:
-{ad_description}"""
-
-    return run_agent("agent1", "Ad Creative Analyzer", system_prompt, user_prompt)
-
-
-def agent_2_analyze_page(landing_page_description: str) -> Dict:
-    """Agent 2: Maps current page structure and identifies personalization zones."""
-    
-    system_prompt = "You are an expert landing page analyst. Map page structure and identify areas where copy can be personalized to match incoming traffic."
-    
-    user_prompt = f"""Analyze this landing page and extract the following using this exact JSON schema:
-{{
-  "current_headline": "main headline",
-  "current_subheading": "supporting headline",
-  "current_cta": "main call to action",
-  "current_messaging_focus": "what the page emphasizes",
-  "personalization_opportunities": [
-    "hero_headline",
-    "hero_subheading",
-    "primary_cta"
-  ]
-}}
-
-Landing Page Description:
-{landing_page_description}"""
-
-    return run_agent("agent2", "Landing Page Analyzer", system_prompt, user_prompt)
-
-
-def agent_3_create_strategy(ad_analysis: Dict, page_analysis: Dict) -> Dict:
-    """Agent 3: Designs the CRO-aligned personalization strategy."""
-    
-    system_prompt = "You are a CRO (Conversion Rate Optimization) expert. Design personalization strategies that improve conversion rates by matching landing pages to ad creatives."
-    
-    user_prompt = f"""Given this ad creative analysis:
-{json.dumps(ad_analysis, indent=2)}
-
-And this current landing page analysis:
-{json.dumps(page_analysis, indent=2)}
-
-Create a personalization strategy using CRO principles. Use this exact JSON schema:
-{{
-  "message_match": {{
-    "new_page_headline": "...",
-    "rationale": "why this improves conversion"
-  }},
-  "scent_trail": {{
-    "page_emphasis": "...",
-    "rationale": "..."
-  }},
-  "cta_optimization": {{
-    "new_cta": "...",
-    "rationale": "..."
-  }},
-  "modifications_summary": [
-    "High-level change 1",
-    "High-level change 2"
-  ]
-}}"""
-
-    return run_agent("agent3", "Personalization Strategist", system_prompt, user_prompt)
-
-
-def agent_4_generate_comparison(page_analysis: Dict, strategy: Dict) -> Dict:
-    """Agent 4: Synthesizes the final before/after comparison."""
-    
-    system_prompt = "You are an expert at creating clear before/after product comparisons. Show the original vs personalized content side-by-side."
-    
-    user_prompt = f"""Given this landing page analysis:
-{json.dumps(page_analysis, indent=2)}
-
-And this personalization strategy:
-{json.dumps(strategy, indent=2)}
-
-Create a before/after comparison using this exact JSON schema:
-{{
-  "before": {{
-    "headline": "original headline",
-    "subheading": "original subheading",
-    "cta": "original cta"
-  }},
-  "after": {{
-    "headline": "personalized headline (matching ad)",
-    "subheading": "personalized subheading",
-    "cta": "personalized cta (using ad language)"
-  }},
-  "changes_explained": [
-    "Change 1: Why it matters",
-    "Change 2: Why it matters"
-  ]
-}}"""
-
-    return run_agent("agent4", "Comparison Generator", system_prompt, user_prompt)
-
-# --- UI Formatting Helpers ---
-
-def format_before_after(comparison: Dict) -> Tuple[str, str]:
-    """Formats the JSON comparison data into readable Markdown for the UI."""
-    before = comparison.get("before", {})
-    after = comparison.get("after", {})
-    
-    before_text = f"""### 📄 Original Landing Page
-
-**Headline:** {before.get('headline', 'N/A')}
-
-**Subheading:** {before.get('subheading', 'N/A')}
-
-**Call to Action:** {before.get('cta', 'N/A')}
-"""
-    
-    after_text = f"""### ✨ Personalized Landing Page
-
-**Headline:** {after.get('headline', 'N/A')}
-
-**Subheading:** {after.get('subheading', 'N/A')}
-
-**Call to Action:** {after.get('cta', 'N/A')}
-"""
-    
-    return before_text, after_text
-
-def format_strategy(strategy: Dict) -> str:
-    """Formats the CRO strategy JSON into a readable Markdown report."""
-    output = "## 🎯 CRO Personalization Strategy\n\n"
-    
-    if "message_match" in strategy:
-        mm = strategy["message_match"]
-        output += f"**1. Message Match:** Changed headline to '{mm.get('new_page_headline', '')}'. *Why: {mm.get('rationale', '')}*\n\n"
-        
-    if "scent_trail" in strategy:
-        st = strategy["scent_trail"]
-        output += f"**2. Scent Trail:** {st.get('page_emphasis', '')}. *Why: {st.get('rationale', '')}*\n\n"
-        
-    if "cta_optimization" in strategy:
-        cta = strategy["cta_optimization"]
-        output += f"**3. CTA Optimization:** Updated to '{cta.get('new_cta', '')}'. *Why: {cta.get('rationale', '')}*\n\n"
-        
-    return output
-
-# --- Main Orchestrator ---
-
-def personalize_landing_page(ad_description: str, landing_page_description: str, progress=gr.Progress()):
-    """Main pipeline that orchestrates the 4 agents sequentially."""
-    
-    if not ad_description.strip() or not landing_page_description.strip():
-        return "⚠️ Please provide both descriptions.", "", "", ""
-
-    try:
-        global agent_status
-        agent_status = {}
-        
-        progress(0.1, desc="Agent 1: Analyzing ad creative...")
-        ad_analysis = agent_1_analyze_ad(ad_description)
-        
-        progress(0.3, desc="Agent 2: Analyzing landing page...")
-        page_analysis = agent_2_analyze_page(landing_page_description)
-        
-        progress(0.6, desc="Agent 3: Creating CRO strategy...")
-        strategy = agent_3_create_strategy(ad_analysis, page_analysis)
-        
-        progress(0.8, desc="Agent 4: Generating comparison...")
-        comparison = agent_4_generate_comparison(page_analysis, strategy)
-        
-        progress(1.0, desc="Complete!")
-        
-        # Format for UI
-        strategy_text = format_strategy(strategy)
-        before_text, after_text = format_before_after(comparison)
-        
-        changes = comparison.get("changes_explained", [])
-        changes_text = "## 💡 What Changed & Why\n\n" + "\n\n".join(f"**{i+1}.** {change}" for i, change in enumerate(changes))
-        
-        return strategy_text, before_text, after_text, changes_text
-        
-    except Exception as e:
-        error_msg = f"❌ Error: {str(e)}\n\n(Tip: Did you set the GEMINI_API_KEY in your Hugging Face space secrets?)"
-        return error_msg, "", "", ""
 
 # --- Gradio UI Layout ---
-
-with gr.Blocks(theme=gr.themes.Soft(), title="AI Landing Page Personalizer") as demo:
-    gr.Markdown("""
-    # 🚀 AI Landing Page Personalizer
-    ### Multi-Agent CRO Optimization System
-    
-    This system uses **4 specialized AI agents** (powered by Gemini 1.5 Flash) to personalize landing pages based on ad creative:
-    - **Agent 1:** Analyzes ad messaging and tone
-    - **Agent 2:** Maps current landing page structure  
-    - **Agent 3:** Creates CRO-aligned strategy
-    - **Agent 4:** Generates before/after comparison
-    """)
+with gr.Blocks(theme=gr.themes.Soft(), title="AI CRO Personalizer") as demo:
+    gr.Markdown("# 🚀 AI Landing Page Personalizer")
+    gr.Markdown("Upload an ad creative and paste your landing page URL to generate a CRO-optimized experience.")
     
     with gr.Row():
         with gr.Column():
-            gr.Markdown("### 📢 Ad Creative Context")
-            ad_input = gr.Textbox(
-                label="Describe the ad the user just clicked",
-                placeholder="Example: Facebook ad for a fitness app. Headline: 'Transform Your Body in 30 Days'. CTA: 'Start Free Trial'. Visuals are energetic and orange.",
-                lines=5
-            )
+            ad_input = gr.Image(type="filepath", label="1. Upload Ad Creative")
+            url_input = gr.Textbox(label="2. Enter Landing Page URL", placeholder="https://www.example.com")
+            submit_btn = gr.Button("Generate Personalized Page", variant="primary")
             
-            gr.Markdown("### 🌐 Landing Page Context")
-            page_input = gr.Textbox(
-                label="Describe your generic landing page",
-                placeholder="Example: Headline: 'Welcome to FitApp'. Subheading: 'Your fitness journey starts here'. CTA: 'Sign Up Now'. Focuses on general wellness.",
-                lines=5
-            )
-            
-            submit_btn = gr.Button("🎯 Generate Personalized Page", variant="primary", size="lg")
-    
     gr.Markdown("---")
     
     with gr.Row():
-        strategy_output = gr.Markdown(label="Personalization Strategy")
-    
-    gr.Markdown("---")
-    gr.Markdown("## 📊 Before & After Comparison")
-    
+        strategy_output = gr.Markdown(label="Strategy & Reasoning")
+        
+    gr.Markdown("### 📊 Page Content Comparison")
     with gr.Row():
         with gr.Column():
-            before_output = gr.Markdown(label="Original")
+            gr.Markdown("#### Original 'Above the Fold' Copy")
+            before_output = gr.Markdown()
         with gr.Column():
-            after_output = gr.Markdown(label="Personalized")
-            
-    with gr.Row():
-        changes_output = gr.Markdown(label="Changes Explained")
+            gr.Markdown("#### ✨ Personalized Copy")
+            after_output = gr.Markdown()
 
     submit_btn.click(
         fn=personalize_landing_page,
-        inputs=[ad_input, page_input],
-        outputs=[strategy_output, before_output, after_output, changes_output]
+        inputs=[ad_input, url_input],
+        outputs=[strategy_output, before_output, after_output]
     )
 
 if __name__ == "__main__":
