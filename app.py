@@ -10,15 +10,13 @@ agent_status = {}
 def get_gemini_model(system_prompt: str):
     """
     Helper function to initialize the Gemini model with specific PM constraints.
-    We use gemini-1.5-flash for speed, set a low temperature for consistency, 
-    and FORCE the output to be JSON so our UI never breaks.
     """
     return genai.GenerativeModel(
-        model_name='gemini-1.5-flash',
+        model_name='gemini-1.5-flash-latest', # <--- Changed to -latest
         system_instruction=system_prompt,
         generation_config=genai.GenerationConfig(
-            temperature=0.3, # Low temp for deterministic, analytical outputs
-            response_mime_type="application/json", # CRITICAL: Forces pure JSON output
+            temperature=0.3, 
+            response_mime_type="application/json", 
         )
     )
 
